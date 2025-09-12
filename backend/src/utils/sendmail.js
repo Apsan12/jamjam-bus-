@@ -118,3 +118,44 @@ export const resetPasswordTemplate = (username, resetLink) => {
   </div>
   `;
 };
+
+export const bookingConfirmationTemplate = (username, bookingDetails) => {
+  return `
+  <div style="max-width: 600px; margin: auto; background: rgba(249, 249, 249, 0.52);  
+              border-radius: 12px; padding: 30px;  
+              font-family: Arial, sans-serif; color: #333; line-height: 1.6; 
+              box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
+    <!-- Logo -->
+    <div style="text-align: center; margin-bottom: 20px;">
+      <img src="https://img.icons8.com/color/96/bus.png" alt="GoBus Logo" style="width:80px; height:80px;" />
+    </div>
+    <!-- Heading -->
+    <h2 style="color: #2b6cb0; text-align: center; margin-bottom: 10px;">
+      Booking Confirmation
+    </h2>
+    <!-- Divider -->
+    <hr style="border: none; border-top: 2px solid #eee; margin: 20px 0;" />
+    <!-- Body -->
+    <p style="font-size: 15px; text-align: center;">
+      Thank you for booking with GoBus, ${username}! 🎉
+    </p>
+    <p style="font-size: 15px; text-align: center;">
+      Here are your booking details:
+    </p>
+    <ul style="font-size: 15px; list-style: none; padding: 0;">
+      <li><strong>Bus:</strong> ${bookingDetails.bus}</li>
+      <li><strong>Route:</strong> ${bookingDetails.route}</li>
+      <li><strong>Travel Date:</strong> ${bookingDetails.travelDate}</li>
+      <li><strong>Seat Numbers:</strong> ${bookingDetails.seatNumbers.join(
+        ", "
+      )}</li>
+      <li><strong>Total Price:</strong> $${bookingDetails.totalPrice}</li>
+    </ul>
+    <!-- Footer -->
+    <div style="text-align: center; margin-top: 30px; font-size: 14px; color: #555;">
+      <p>Safe travels,</p>
+      <p><strong>The GoBus Team</strong></p>
+    </div>
+  </div>
+  `;
+};

@@ -6,14 +6,16 @@ import cookieParser from "cookie-parser";
 import { ensureAdminUser } from "./admin.js";
 import busRoute from "./src/route/rute.js";
 import busRouter from "./src/route/bus.route.js";
+import { bookingRouter } from "./src/route/booking.route.js";
 config();
 const app = express();
 app.use(express.json());
 app.use(cookieParser());
 const PORT = process.env.PORT || 3000;
 app.use("/api/users", userRouter);
-app.use("/api/routes",busRoute);
-app.use("/api/buses",busRouter);
+app.use("/api/routes", busRoute);
+app.use("/api/buses", busRouter);
+app.use("/api/bookings", bookingRouter);
 app.get("/", (req, res) => {
   res.send("Hello World!");
 });
