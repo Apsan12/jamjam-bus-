@@ -1,15 +1,10 @@
+import { Routes, Route } from "react-router-dom";
+import AdminLayout from "./layout/adminLayout";
 
-import './App.css'
-
-import React from 'react'
-
-const App = () => {
-  return (
-    <div>
-      <p className='text-2xl text-black bg-amber-600 items-center flex-initial'>hey there</p>
-    </div>
-  )
+export default function App() {
+  return (  
+    <Routes>
+      <Route path="/" element={<AdminLayout />}></Route>
+    </Routes>
+  );
 }
-
-export default App
-
