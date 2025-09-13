@@ -7,7 +7,8 @@ const authorization = (roles = []) => {
 
   return (req, res, next) => {
     const userRole = req.user?.role;
-    if (!userRole) return res.status(401).json({ message: "Unauthorized" });
+    // console.log(userRole,);
+    if (!userRole) return res.status(401).json({ message: "Unauthorized kina bhako " });
 
     const hasAccess = roles.includes(userRole);
     if (!hasAccess) return res.status(403).json({ message: "Forbidden" });

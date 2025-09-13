@@ -1,6 +1,6 @@
 import Route from "../model/route.model.js";
 import Bus from "../model/bus.model.js";
-import { cloudinary } from "../config/multer.js"; // reuse configured cloudinary
+import { cloudinary, uploadOne } from "../config/multer.js"; // reuse configured cloudinary
 
 /* Helpers */
 const slugify = (str) =>
@@ -19,10 +19,10 @@ const buildUniqueSlug = async (base) => {
   return slug;
 };
 
-const parsePositiveNumber = (val) => {
-  const n = Number(val);
-  return Number.isFinite(n) && n > 0 ? n : null;
-};
+// const parsePositiveNumber = (val) => {
+//   const n = Number(val);
+//   return Number.isFinite(n) && n > 0 ? n : null;
+// };
 
 const findRouteOr404 = async (id, res) => {
   if (!id) {
@@ -39,64 +39,70 @@ const findRouteOr404 = async (id, res) => {
 
 /* Create */
 export const createRoute = async (req, res) => {
-  try {
-    let { routeName, startLocation, endLocation, distance, busId } = req.body;
+  // Run upload first
+  const upload = uploadOne("routeMap", { folder: "gobus_routes" });
+  upload(req, res, async (err) => {
+    if (err) return res.status(400).json({ message: err.message });
 
-    if (!routeName || !startLocation || !endLocation || !distance || !busId) {
-      return res.status(400).json({
-        message:
-          "routeName, startLocation, endLocation, distance, busId are required",
+    try {
+      let { routeName, startLocation, endLocation, distance, busId } = req.body;
+
+      if (!routeName || !startLocation || !endLocation || !distance || !busId) {
+        return res.status(400).json({
+          message:
+            "routeName, startLocation, endLocation, distance, busId are required",
+        });
+      }
+
+      if (!req.file) {
+        return res
+          .status(400)
+          .json({ message: "Route map image (routeMap) is required" });
+      }
+
+      routeName = routeName.trim();
+      startLocation = startLocation.trim();
+      endLocation = endLocation.trim();
+
+      // distance = parsePositiveNumber(distance);
+      // if (!distance)
+      //   return res
+      //     .status(400)
+      //     .json({ message: "distance must be a positive number" });
+
+      const bus = await Bus.findById(busId);
+      if (!bus) return res.status(404).json({ message: "Bus not found" });
+
+      const duplicate = await Route.findOne({
+        routeName,
+        startLocation,
+        endLocation,
       });
+      if (duplicate)
+        return res
+          .status(409)
+          .json({ message: "Route with same name and endpoints exists" });
+
+      const baseSlug = slugify(routeName);
+      const routeURL = await buildUniqueSlug(baseSlug);
+
+      const route = await Route.create({
+        routeName,
+        startLocation,
+        endLocation,
+        distance: distance ,
+        bus: busId,
+        routeURL,
+        routeMapUrl: req.file.path,
+        routeMapPublicId: req.file.filename,
+      });
+
+      res.status(201).json({ message: "Route created", route });
+    } catch (e) {
+      console.error("createRoute error:", e);
+      res.status(500).json({ message: "Server error" });
     }
-
-    if (!req.file) {
-      return res
-        .status(400)
-        .json({ message: "Route map image (routeMap) is required" });
-    }
-
-    routeName = routeName.trim();
-    startLocation = startLocation.trim();
-    endLocation = endLocation.trim();
-
-    distance = parsePositiveNumber(distance);
-    if (!distance)
-      return res
-        .status(400)
-        .json({ message: "distance must be a positive number" });
-
-    const bus = await Bus.findById(busId);
-    if (!bus) return res.status(404).json({ message: "Bus not found" });
-
-    const duplicate = await Route.findOne({
-      routeName,
-      startLocation,
-      endLocation,
-    });
-    if (duplicate)
-      return res
-        .status(409)
-        .json({ message: "Route with same name and endpoints exists" });
-
-    const baseSlug = slugify(routeName);
-    const routeURL = await buildUniqueSlug(baseSlug);
-
-    const route = await Route.create({
-      routeName,
-      startLocation,
-      endLocation,
-      distance,
-      bus: busId,
-      routeURL,
-      routeMapUrl: req.file.path,
-      routeMapPublicId: req.file.filename,
-    });
-
-    res.status(201).json({ message: "Route created", route });
-  } catch (e) {
-    console.error("createRoute error:", e);
-    res.status(500).json({ message: "Server error" });
-  }
+  });
 };
 
 /* List with filtering/search/sort/pagination */
@@ -200,66 +206,76 @@ export const readRouteByURL = async (req, res) => {
 
 /* Update */
 export const updateRoute = async (req, res) => {
-  try {
-    const route = await findRouteOr404(req.params.id, res);
-    if (!route) return;
+  const upload = uploadOne("routeMap", {
+    folder: "gobus_routes",
+    optional: true,
+  });
 
-    const { routeName, startLocation, endLocation, distance, busId } = req.body;
+  upload(req, res, async (err) => {
+    if (err) return res.status(400).json({ message: err.message });
 
-    // If routeName changes -> new slug (unique)
-    if (routeName && routeName.trim() && routeName !== route.routeName) {
-      const base = slugify(routeName);
-      route.routeURL = await buildUniqueSlug(base);
-      route.routeName = routeName.trim();
-    }
-    if (startLocation?.trim()) route.startLocation = startLocation.trim();
-    if (endLocation?.trim()) route.endLocation = endLocation.trim();
+    try {
+      const route = await findRouteOr404(req.params.id, res);
+      if (!route) return;
 
-    if (distance !== undefined) {
-      const d = parsePositiveNumber(distance);
-      if (!d)
-        return res
-          .status(400)
-          .json({ message: "distance must be positive number" });
-      route.distance = d;
-    }
+      const { routeName, startLocation, endLocation, distance, busId } =
+        req.body;
 
-    if (busId) {
-      const bus = await Bus.findById(busId);
-      if (!bus) return res.status(404).json({ message: "Bus not found" });
-      route.bus = busId;
-    }
-
-    if (req.file) {
-      if (route.routeMapPublicId) {
-        try {
-          await cloudinary.uploader.destroy(route.routeMapPublicId);
-        } catch (err) {
-          console.warn("Cloudinary destroy failed:", err.message);
-        }
+      // If routeName changes -> new slug
+      if (routeName && routeName.trim() && routeName !== route.routeName) {
+        const base = slugify(routeName);
+        route.routeURL = await buildUniqueSlug(base);
+        route.routeName = routeName.trim();
       }
-      route.routeMapUrl = req.file.path;
-      route.routeMapPublicId = req.file.filename;
+      if (startLocation?.trim()) route.startLocation = startLocation.trim();
+      if (endLocation?.trim()) route.endLocation = endLocation.trim();
+
+      if (distance !== undefined) {
+        const d = parsePositiveNumber(distance);
+        if (!d)
+          return res
+            .status(400)
+            .json({ message: "distance must be positive number" });
+        route.distance = d;
+      }
+
+      if (busId) {
+        const bus = await Bus.findById(busId);
+        if (!bus) return res.status(404).json({ message: "Bus not found" });
+        route.bus = busId;
+      }
+
+      if (req.file) {
+        if (route.routeMapPublicId) {
+          try {
+            await cloudinary.uploader.destroy(route.routeMapPublicId);
+          } catch (err) {
+            console.warn("Cloudinary destroy failed:", err.message);
+          }
+        }
+        route.routeMapUrl = req.file.path;
+        route.routeMapPublicId = req.file.filename;
+      }
+
+      // Duplicate check
+      const duplicate = await Route.findOne({
+        _id: { $ne: route._id },
+        routeName: route.routeName,
+        startLocation: route.startLocation,
+        endLocation: route.endLocation,
+      });
+      if (duplicate)
+        return res
+          .status(409)
+          .json({ message: "Another route with same identifiers exists" });
+
+      await route.save();
+      res.status(200).json({ message: "Route updated", route });
+    } catch (e) {
+      console.error("updateRoute error:", e);
+      res.status(500).json({ message: "Server error" });
     }
-
-    // Duplicate check if core identifiers changed
-    const duplicate = await Route.findOne({
-      _id: { $ne: route._id },
-      routeName: route.routeName,
-      startLocation: route.startLocation,
-      endLocation: route.endLocation,
-    });
-    if (duplicate)
-      return res
-        .status(409)
-        .json({ message: "Another route with same identifiers exists" });
-
-    await route.save();
-    res.status(200).json({ message: "Route updated", route });
-  } catch (e) {
-    console.error("updateRoute error:", e);
-    res.status(500).json({ message: "Server error" });
-  }
+  });
 };
 
 /* Delete (hard) */

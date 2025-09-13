@@ -12,7 +12,7 @@ const routeSchema = new mongoose.Schema(
       required: [true, "Start location is required"],
     },
     endLocation: { type: String, required: [true, "End location is required"] },
-    distance: { type: Number, required: [true, "Distance is required"] },
+    distance: { type: String, required: [true, "Distance is required"] },
     bus: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Bus",

@@ -13,9 +13,11 @@ import {
   getAllUsers,
   getUserById,
   deleteUser,
+  
 } from "../controller/user.controller.js";
 import authenticated from "../middleware/authinticate.js";
 import authorization from "../middleware/authorize.js";
+// import { uploadOne, UPLOAD_FOLDERS } from "../config/multer.js";
 
 const userRouter = Router();
 
@@ -32,6 +34,12 @@ userRouter.get("/me", authenticated, userProfile);
 userRouter.patch("/update", authenticated, updateUser);
 userRouter.patch("/password", authenticated, updatePassword);
 userRouter.post("/logout", authenticated, logoutUser);
+// userRouter.post(
+//   "/avatar",
+//   authenticated,
+//   uploadOne("avatar", { folder: UPLOAD_FOLDERS.avatars }),
+//   updateAvatar
+// );
 
 // Admin/self protected (reuse auth middleware
 userRouter.get("/", authenticated, authorization("admin"), getAllUsers);

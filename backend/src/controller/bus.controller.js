@@ -2,49 +2,55 @@ import Bus from "../model/bus.model.js";
 import { v2 as cloudinary } from "cloudinary";
 
 // Create Bus
-export const createBus = async (req, res) => {
-  try {
-    let { busNumber, route, capacity } = req.body;
+import { uploadOne, UPLOAD_FOLDERS } from "../config/multer.js";
 
-    if (!busNumber || !route || !capacity) {
+export const createBus = (req, res) => {
+  const upload = uploadOne("image", { folder: UPLOAD_FOLDERS.buses });
+
+  upload(req, res, async (err) => {
+    if (err) return; // uploadOne already handled error responses
+
+    try {
+      let { busNumber, route, capacity, description = "", busName } = req.body;
+
+      if (!busNumber || !capacity || !req.file) {
+        return res
+          .status(400)
+          .json({ message: "busNumber, capacity, image are required" });
+      }
+
+      const normalizedBusNumber = busNumber.trim().toUpperCase();
+      const capNum = Number(capacity);
+      if (!Number.isFinite(capNum) || capNum <= 0) {
+        return res
+          .status(400)
+          .json({ message: "capacity must be a positive number" });
+      }
+
+      const exists = await Bus.findOne({ busNumber: normalizedBusNumber });
+      if (exists)
+        return res.status(409).json({ message: "Bus number already exists" });
+
+      const newBus = await Bus.create({
+        busNumber: normalizedBusNumber,
+        route,
+        capacity: capNum,
+        image: req.file.path,        // secure_url
+        imagePublicId: req.file.filename, // public_id
+        description: description.trim(),
+        ...(busName ? { busName: busName.trim() } : {}),
+      });
+
       return res
-        .status(400)
-        .json({ message: "busNumber, route, capacity are required" });
+        .status(201)
+        .json({ message: "Bus created successfully", bus: newBus });
+    } catch (error) {
+      console.error("createBus error:", error);
+      return res.status(500).json({ message: "Server error" });
     }
-
-    capacity = Number(capacity);
-    if (!Number.isFinite(capacity) || capacity <= 0) {
-      return res
-        .status(400)
-        .json({ message: "capacity must be a positive number" });
-    }
-
-    if (!req.file) {
-      return res.status(400).json({ message: "Image is required" });
-    }
-
-    // Normalize busNumber (optional)
-    const normalizedBusNumber = busNumber.trim().toUpperCase();
-
-    const exists = await Bus.findOne({ busNumber: normalizedBusNumber });
-    if (exists) {
-      return res.status(409).json({ message: "Bus number already exists" });
-    }
-
-    const newBus = await Bus.create({
-      busNumber: normalizedBusNumber,
-      route,
-      capacity,
-      imageUrl: req.file.path,
-      imagePublicId: req.file.filename,
-    });
-
-    res.status(201).json({ message: "Bus created", bus: newBus });
-  } catch (error) {
-    console.error("createBus error:", error);
-    res.status(500).json({ message: "Server error" });
-  }
+  });
 };
+
 
 // Get all buses (with optional pagination)
 export const readBus = async (req, res) => {
@@ -62,7 +68,7 @@ export const readBus = async (req, res) => {
       page,
       limit,
       total,
-      pages: Math.ceil(total / limit), 
+      pages: Math.ceil(total / limit),
       buses,
     });
   } catch (error) {
@@ -85,56 +91,61 @@ export const readSpecificBus = async (req, res) => {
 };
 
 // Update bus (handles optional new image)
-export const updateBus = async (req, res) => {
-  try {
-    const { id } = req.params;
-    let { busNumber, route, capacity } = req.body;
 
-    const bus = await Bus.findById(id);
-    if (!bus) return res.status(404).json({ message: "Bus not found" });
+export const updateBus = (req, res) => {
+  const upload = uploadOne("image", { folder: UPLOAD_FOLDERS.buses, optional: true });
 
-    if (busNumber) {
-      const normalized = busNumber.trim().toUpperCase();
-      if (normalized !== bus.busNumber) {
-        const duplicate = await Bus.findOne({ busNumber: normalized });
-        if (duplicate) {
-          return res.status(409).json({ message: "Bus number already exists" });
-        }
-        bus.busNumber = normalized;
-      }
-    }
+  upload(req, res, async (err) => {
+    if (err) return; // uploadOne already handled error responses
 
-    if (capacity !== undefined) {
-      const numCap = Number(capacity);
-      if (!Number.isFinite(numCap) || numCap <= 0) {
-        return res.status(400).json({ message: "capacity must be positive" });
-      }
-      bus.capacity = numCap;
-    }
+    try {
+      const { id } = req.params;
+      let { busNumber, route, capacity, description, busName } = req.body;
 
-    if (route) bus.route = route;
+      const bus = await Bus.findById(id);
+      if (!bus) return res.status(404).json({ message: "Bus not found" });
 
-    // New image uploaded?
-    if (req.file) {
-      // Remove old image if present
-      if (bus.imagePublicId) {
-        try {
-          await cloudinary.uploader.destroy(bus.imagePublicId);
-        } catch (e) {
-          console.warn("Cloudinary destroy failed:", e.message);
+      if (busNumber) {
+        const normalized = busNumber.trim().toUpperCase();
+        if (normalized !== bus.busNumber) {
+          const dup = await Bus.findOne({ busNumber: normalized, _id: { $ne: bus._id } });
+          if (dup)
+            return res.status(409).json({ message: "Bus number already exists" });
+          bus.busNumber = normalized;
         }
       }
-      bus.imageUrl = req.file.path;
-      bus.imagePublicId = req.file.filename;
-    }
 
-    await bus.save();
-    res.status(200).json({ message: "Bus updated", bus });
-  } catch (error) {
-    console.error("updateBus error:", error);
-    res.status(500).json({ message: "Server error" });
-  }
+      if (capacity !== undefined) {
+        const capNum = Number(capacity);
+        if (!Number.isFinite(capNum) || capNum <= 0) {
+          return res
+            .status(400)
+            .json({ message: "capacity must be a positive number" });
+        }
+        bus.capacity = capNum;
+      }
+
+      if (route) bus.route = route;
+      if (description !== undefined) bus.description = description.trim();
+      if (busName !== undefined) bus.busName = busName.trim();
+
+      if (req.file) {
+        if (bus.imagePublicId) {
+          await destroyCloudinary(bus.imagePublicId);
+        }
+        bus.image = req.file.path;
+        bus.imagePublicId = req.file.filename;
+      }
+
+      await bus.save();
+      return res.status(200).json({ message: "Bus updated", bus });
+    } catch (error) {
+      console.error("updateBus error:", error);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
 };
+
 
 // Delete bus (removes Cloudinary image)
 export const deleteBus = async (req, res) => {

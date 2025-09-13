@@ -11,10 +11,11 @@ const busSchema = new mongoose.Schema(
     route: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Route",
-      required: [true, "route is required"],
+      required: [false, "route is required"],
     },
     capacity: { type: Number, required: [true, "capacity is required"] },
-    imageUrl: { type: String, required: [true, "imageUrl is required"] },
+    image: { type: String, required: [true, "image is required"] },
+    description: { type: String, default: "" },
   },
   { timestamps: true }
 );

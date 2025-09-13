@@ -18,70 +18,72 @@ const generateBookingRef = () =>
   Date.now().toString().slice(-5);
 
 const calcPrice = (bus, route, seatCount) => {
-  // Customize: e.g. distance * ratePerKm. Fallback flat 10 per seat.
-  const basePerSeat = 10;
-  return seatCount * basePerSeat;
+  // Customize: distance-based if available
+  const perSeat = 10;
+  return seatCount * perSeat;
 };
 
-// Create booking (atomic with transaction if available)
-export const createBooking = async (req, res) => {
-  const { busId, routeId, travelDate, seatNumbers, notes } = req.body;
-  if (
-    !busId ||
-    !routeId ||
-    !travelDate ||
-    !Array.isArray(seatNumbers) ||
-    !seatNumbers.length
-  ) {
-    return res
-      .status(400)
-      .json({ message: "busId, routeId, travelDate, seatNumbers required" });
-  }
+const isTxnError = (e) =>
+  e?.code === 251 ||
+  e?.codeName === "NoSuchTransaction" ||
+  e?.errorLabelSet?.has?.("TransientTransactionError");
 
-  const cleanSeats = [...new Set(seatNumbers.map(Number))].filter(
+const getCleanSeats = (arr) => {
+  const nums = Array.isArray(arr) ? arr : [arr];
+  const clean = [...new Set(nums.map(Number))].filter(
     (n) => Number.isInteger(n) && n > 0
   );
-  if (!cleanSeats.length)
-    return res.status(400).json({ message: "Valid seatNumbers required" });
+  return clean;
+};
 
-  let dateObj = normalizeDate(travelDate);
+// Create booking (transaction if possible, fallback if not)
+export const createBooking = async (req, res) => {
+  const { busId, routeId, travelDate, seatNumber, notes } = req.body;
+
+  // Basic validation
+  if (!busId || !routeId || !travelDate || !seatNumber) {
+    return res
+      .status(400)
+      .json({ message: "busId, routeId, travelDate, seatNumber required" });
+  }
+
+  const seats = getCleanSeats(seatNumber);
+  if (!seats.length) {
+    return res.status(400).json({ message: "Valid seatNumber array required" });
+  }
+
+  const dateObj = normalizeDate(travelDate);
   if (!dateObj) return res.status(400).json({ message: "Invalid travelDate" });
 
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
-  const session = await mongoose.startSession();
-  let useTxn = false;
-  try {
-    // Try to start transaction (works only on replica set)
-    session.startTransaction();
-    useTxn = true;
+  const run = async (session) => {
+    const q = (m) => (session ? m.session(session) : m);
 
     const [bus, route, user] = await Promise.all([
-      Bus.findById(busId).session(session),
-      Route.findById(routeId).session(session),
-      User.findById(userId).session(session),
+      q(Bus.findById(busId)),
+      q(Route.findById(routeId)),
+      q(User.findById(userId)),
     ]);
 
     if (!bus) return res.status(404).json({ message: "Bus not found" });
     if (!route) return res.status(404).json({ message: "Route not found" });
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    // (Optional) ensure route.bus == busId
     if (route.bus?.toString() !== bus._id.toString()) {
       return res.status(400).json({ message: "Route does not belong to bus" });
     }
 
-    // Validate seat range
-    const invalidSeats = cleanSeats.filter((s) => s > bus.capacity);
+    const invalidSeats = seats.filter((s) => s > bus.capacity);
     if (invalidSeats.length) {
       return res
         .status(400)
         .json({ message: `Invalid seat numbers: ${invalidSeats.join(",")}` });
     }
 
-    // Check already booked seats for that bus/date
-    const existing = await Booking.aggregate([
+    // Check taken seats for this bus/date
+    const agg = Booking.aggregate([
       {
         $match: {
           bus: bus._id,
@@ -89,67 +91,99 @@ export const createBooking = async (req, res) => {
           status: "booked",
         },
       },
-      { $unwind: "$seatNumbers" },
+      { $unwind: "$seatNumber" }, // each seat as separate doc
       {
         $group: {
           _id: null,
-          seats: { $addToSet: "$seatNumbers" },
+          seats: { $addToSet: "$seatNumber" },
         },
       },
-    ]).session(session);
-
+    ]);
+    if (session) agg.session(session);
+    const existing = await agg;
     const taken = existing.length ? new Set(existing[0].seats) : new Set();
-    const clashes = cleanSeats.filter((s) => taken.has(s));
+
+    const clashes = seats.filter((s) => taken.has(s));
     if (clashes.length) {
       return res
         .status(409)
         .json({ message: "Seats already booked", seats: clashes });
     }
 
-    const totalPrice = calcPrice(bus, route, cleanSeats.length);
+    const totalPrice = calcPrice(bus, route, seats.length);
     const bookingReference = generateBookingRef();
 
-    const booking = await Booking.create(
+    const created = await Booking.create(
       [
         {
           user: user._id,
           bus: bus._id,
           route: route._id,
           travelDate: dateObj,
-          seatNumbers: cleanSeats,
+          seatNumber: seats,
           totalPrice,
           status: "booked",
           paymentStatus: "pending",
           bookingReference,
-          notes: notes?.trim(),
+          notes: typeof notes === "string" ? notes.trim() : undefined,
         },
       ],
-      { session }
+      session ? { session } : {}
     );
 
-    await session.commitTransaction();
-    sendMail(
-      bookingConfirmationTemplate(user.email, {
+    // Fire-and-forget email (do not block booking)
+    try {
+      const { subject, html, text } = bookingConfirmationTemplate({
         name: user.username,
         bookingRef: bookingReference,
-        bus: bus.name,
-        route: route.name,
+        bus: bus.busName || bus.busNumber || String(bus._id),
+        route: route.routeName || String(route._id),
         travelDate: dateObj,
-        seatNumbers: cleanSeats,
+        seatNumbers: seats,
         totalPrice,
-      })
-    );
-    res.status(201).json({ message: "Booking created", booking: booking[0] });
+      });
+
+      sendMail({ to: user.email, subject, html, text }).catch((e) =>
+        console.warn("sendMail error:", e.message)
+      );
+    } catch (e) {
+      console.warn("email template error:", e.message);
+    }
+
+    return res
+      .status(201)
+      .json({ message: "Booking created", booking: created[0] });
+  };
+
+  // Try transaction
+  let session;
+  try {
+    session = await mongoose.startSession();
+    session.startTransaction();
+    const out = await run(session);
+    if (out?.headersSent) {
+      await session.commitTransaction();
+      return;
+    }
+    await session.commitTransaction();
   } catch (e) {
-    if (useTxn) {
+    try {
+      await session?.abortTransaction();
+    } catch {}
+    if (isTxnError(e)) {
+      // Fallback: retry without transaction
       try {
-        await session.abortTransaction();
-      } catch (_) {}
+        await run(null);
+        return;
+      } catch (e2) {
+        console.error("createBooking fallback error:", e2);
+        return res.status(500).json({ message: "Server error" });
+      }
     }
     console.error("createBooking error:", e);
-    res.status(500).json({ message: "Server error" });
+    return res.status(500).json({ message: "Server error" });
   } finally {
-    session.endSession();
+    await session?.endSession();
   }
 };
 
@@ -207,13 +241,10 @@ export const getBooking = async (req, res) => {
       .populate("route");
     if (!booking) return res.status(404).json({ message: "Not found" });
 
-    if (
-      booking.user._id.toString() !== req.user.id &&
-      booking.user.role !== "admin" &&
-      req.user.role !== "admin"
-    ) {
+    const isOwner = booking.user._id.toString() === req.user.id;
+    const isAdmin = booking.user.role === "admin" || req.user.role === "admin";
+    if (!isOwner && !isAdmin)
       return res.status(403).json({ message: "Forbidden" });
-    }
 
     res.json({ booking });
   } catch (e) {
@@ -244,7 +275,7 @@ export const cancelBooking = async (req, res) => {
     const booking = await Booking.findById(id);
     if (!booking) return res.status(404).json({ message: "Not found" });
 
-    const user = await User.findById(req.user.id);
+    const user = await User.findById(req.user.id).select("role");
     const isAdmin = user?.role === "admin";
 
     if (booking.user.toString() !== req.user.id && !isAdmin) {
@@ -256,7 +287,6 @@ export const cancelBooking = async (req, res) => {
     }
 
     booking.status = "cancelled";
-    // Optional: adjust paymentStatus, trigger refund, etc.
     await booking.save();
 
     res.json({ message: "Booking cancelled", booking });
